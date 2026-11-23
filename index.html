@@ -46,7 +46,10 @@ function openAuth(mode){let root=document.getElementById("modalRoot");root.inner
 function closeModal(){document.getElementById("modalRoot").innerHTML=""}
 function authSubmit(e,mode){e.preventDefault();let f=e.target,email=f.email.value.toLowerCase();let users=JSON.parse(localStorage.getItem("reverse_users")||"[]");if(mode==="register"){if(users.some(u=>u.email===email))return toast("Account already exists. Log in instead.");let u={id:"u"+Date.now(),name:f.name.value.trim(),email,password:f.password.value,role:f.role.value};users.push(u);localStorage.setItem("reverse_users",JSON.stringify(users));state.user={id:u.id,name:u.name,email:u.email,role:u.role}}else{let u=users.find(x=>x.email===email&&x.password===f.password.value);if(!u)return toast("Email or password is incorrect.");state.user={id:u.id,name:u.name,email:u.email,role:u.role}}save();closeModal();toast("Signed in");render()}
 
-const sb = window.supabase.createClient("https://natytqbhkeircgjjgaje.supabase.co","sb_publishable_H5UNR2SwWDJh9FjfLOnM1Q_Xb3Qqd0d");
+let sb = null;
+if (window.supabase && typeof window.supabase.createClient === "function") {
+  sb = window.supabase.createClient("https://natytqbhkeircgjjgaje.supabase.co","sb_publishable_H5UNR2SwWDJh9FjfLOnM1Q_Xb3Qqd0d");
+}
 let dbReady=false;
 function save(){ /* Supabase is the source of truth. */ }
 function dbError(e){console.error(e);toast(e?.message||"Database error. Please try again.");}
@@ -100,7 +103,10 @@ async function messageSeller(id){const o=state.offers.find(x=>x.id===id),r=state
 async function completeDeal(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(!confirm("Confirm this deal is complete? The 7% commission is recorded. Payment is handled outside the app."))return;try{
  const {error}=await sb.from("transactions").update({status:"completed",completed_at:new Date().toISOString()}).eq("id",id);if(error)throw error;await loadDbState();render();toast("Deal marked complete.");
  }catch(err){dbError(err)}}
-async function initReverse(){try{await loadDbState();render()}catch(e){console.error(e);toast("Could not connect to database. Check Supabase setup.");render()}}
+async function initReverse(){
+ if(!sb){console.warn("Supabase client did not load; showing local preview.");render();toast("Marketplace preview loaded. Database connection is unavailable.");return;}
+ try{await loadDbState();render()}catch(e){console.error(e);toast("Could not connect to database. Check Supabase setup.");render()}
+}
 initReverse();
 
 </script></body></html>

@@ -4,6 +4,7 @@
 </style></head><body>
 <header class="top"><div class="brand"><span class="mark">R</span> reverse<span style="color:#3459e6">.</span></div><nav class="nav" id="nav"><button data-page="home" class="active">Home</button><button data-page="browse">Browse requests</button><button data-page="create">Post a request</button><button data-page="how">How it works</button></nav><div class="actions" id="authActions"><button class="btn" onclick="openAuth('login')">Log in</button><button class="btn primary" onclick="openAuth('register')">Get started</button></div></header>
 <main class="wrap" id="app"></main><footer class="footer">Reverse Marketplace · Buyers set the brief. Sellers make the offer. · 7% platform fee on completed deals.</footer><div id="modalRoot"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const seedRequests=[
 {id:1,title:"Brand identity for a new coffee shop",category:"Design & Creative",description:"Need a complete visual identity: logo, colour palette, typography and a few social templates. Looking for a clean, modern direction.",budget:650,deadline:"2026-12-18",buyer:"Maya Chen",offers:3,created:"2 hours ago",status:"open",image:"",owner:"buyer1"},
@@ -44,5 +45,56 @@ function logout(){state.user=null;save();page="home";render();toast("Signed out"
 function openAuth(mode){let root=document.getElementById("modalRoot");root.innerHTML='<div class="modalback" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modalhead"><h2>'+ (mode==="login"?"Welcome back":"Create your account")+'</h2><button onclick="closeModal()">×</button></div><form onsubmit="authSubmit(event,\''+mode+'\')"><div class="formgrid"><div class="field full '+(mode==="login"?"hidden":"")+'"><label>Full name</label><input name="name" '+(mode==="login"?"":"required")+' placeholder="Your name"></div><div class="field full"><label>Email</label><input name="email" type="email" required placeholder="you@example.com"></div><div class="field full"><label>Password</label><input name="password" type="password" minlength="6" required placeholder="At least 6 characters"></div><div class="field full '+(mode==="login"?"hidden":"")+'"><label>Account type</label><select name="role"><option value="buyer">I want to buy</option><option value="seller">I want to sell</option></select></div><div class="field full"><button class="btn primary" style="width:100%" type="submit">'+(mode==="login"?"Log in":"Create account")+'</button></div></div></form><p class="muted" style="font-size:12px">'+(mode==="login"?'New here? <a href="#" onclick="openAuth(\'register\');return false">Create an account</a>':'Already registered? <a href="#" onclick="openAuth(\'login\');return false">Log in</a>')+'</p><div class="notice">Demo mode: accounts are stored in this browser only. Connect Supabase before accepting real users.</div></div></div>'}
 function closeModal(){document.getElementById("modalRoot").innerHTML=""}
 function authSubmit(e,mode){e.preventDefault();let f=e.target,email=f.email.value.toLowerCase();let users=JSON.parse(localStorage.getItem("reverse_users")||"[]");if(mode==="register"){if(users.some(u=>u.email===email))return toast("Account already exists. Log in instead.");let u={id:"u"+Date.now(),name:f.name.value.trim(),email,password:f.password.value,role:f.role.value};users.push(u);localStorage.setItem("reverse_users",JSON.stringify(users));state.user={id:u.id,name:u.name,email:u.email,role:u.role}}else{let u=users.find(x=>x.email===email&&x.password===f.password.value);if(!u)return toast("Email or password is incorrect.");state.user={id:u.id,name:u.name,email:u.email,role:u.role}}save();closeModal();toast("Signed in");render()}
-render();
+
+const sb = window.supabase.createClient("https://natytqbhkeircgjjgaje.supabase.co","sb_publishable_H5UNR2SwWDJh9FjfLOnM1Q_Xb3Qqd0d");
+let dbReady=false;
+function save(){ /* Supabase is the source of truth. */ }
+function dbError(e){console.error(e);toast(e?.message||"Database error. Please try again.");}
+async function ensureProfile(user){
+ const {data:existing,error:readErr}=await sb.from("profiles").select("*").eq("id",user.id).maybeSingle();if(readErr)throw readErr;if(existing)return existing;
+ const meta=user.user_metadata||{},profile={id:user.id,full_name:meta.full_name||user.email.split("@")[0],role:meta.role==="seller"?"seller":"buyer"};
+ const {data,error}=await sb.from("profiles").upsert(profile).select().single();if(error)throw error;return data;
+}
+async function loadDbState(){
+ const {data:{session}}=await sb.auth.getSession();state={requests:[],offers:[],messages:[],reviews:[],user:null,transactions:[]};
+ if(session){const p=await ensureProfile(session.user);state.user={id:session.user.id,name:p.full_name,email:session.user.email,role:p.role};}
+ const {data:rq,error:re}=await sb.from("requests").select("*,profiles!requests_buyer_id_fkey(full_name)").order("created_at",{ascending:false});if(re)throw re;
+ state.requests=(rq||[]).map(r=>({id:r.id,title:r.title,category:r.category,description:r.description,budget:Number(r.budget),deadline:r.deadline||"",buyer:r.profiles?.full_name||"Buyer",offers:0,created:new Date(r.created_at).toLocaleDateString(),status:r.status==="in_progress"?"in progress":r.status,owner:r.buyer_id,image:(r.image_urls||[])[0]||""}));
+ if(state.user){
+  const {data:of,error:oe}=await sb.from("offers").select("*,profiles!offers_seller_id_fkey(full_name)").order("created_at",{ascending:false});if(oe)throw oe;
+  state.offers=(of||[]).map(o=>({id:o.id,requestId:o.request_id,seller:o.profiles?.full_name||"Seller",sellerId:o.seller_id,price:Number(o.price),days:o.delivery_days,message:o.message,rating:5,status:o.status==="rejected"?"not selected":o.status}));
+  const {data:ms,error:me}=await sb.from("messages").select("*").order("created_at",{ascending:false});if(me)throw me;
+  state.messages=(ms||[]).map(m=>({id:m.id,requestId:m.request_id,from:m.sender_id,to:m.recipient_id,fromId:m.sender_id,toId:m.recipient_id,text:m.body,at:new Date(m.created_at).toLocaleString()}));
+  const {data:tx,error:te}=await sb.from("transactions").select("*").order("created_at",{ascending:false});if(te)throw te;
+  state.transactions=(tx||[]).map(t=>({id:t.id,requestId:t.request_id,offerId:t.offer_id,buyerId:t.buyer_id,sellerId:t.seller_id,amount:Number(t.amount),commission:Number(t.commission_amount),status:t.status==="pending"?"in progress":t.status}));
+ }
+ state.requests.forEach(r=>r.offers=state.offers.filter(o=>o.requestId===r.id).length);dbReady=true;
+}
+async function refreshDb(){try{await loadDbState();render()}catch(e){dbError(e)}}
+async function authSubmit(e,mode){e.preventDefault();const f=e.target,email=f.email.value.trim().toLowerCase(),password=f.password.value;try{
+ if(mode==="register"){const {data,error}=await sb.auth.signUp({email,password,options:{data:{full_name:f.name.value.trim(),role:f.role.value}}});if(error)throw error;if(!data.session){closeModal();toast("Check your email to confirm your account, then log in.");return}await ensureProfile(data.user);}
+ else{const {data,error}=await sb.auth.signInWithPassword({email,password});if(error)throw error;await ensureProfile(data.user);}
+ await loadDbState();closeModal();toast("Signed in");render();
+ }catch(err){dbError(err)}}
+async function logout(){try{const {error}=await sb.auth.signOut();if(error)throw error;await loadDbState();page="home";render();toast("Signed out")}catch(e){dbError(e)}}
+async function createRequest(e){e.preventDefault();if(!state.user)return openAuth("login");const f=e.target;try{
+ const row={buyer_id:state.user.id,title:f.title.value.trim(),category:f.category.value,budget:Number(f.budget.value),deadline:f.deadline.value||null,description:f.description.value.trim()+(f.notes.value?" "+f.notes.value:"")};
+ const {error}=await sb.from("requests").insert(row);if(error)throw error;await loadDbState();toast("Your request is live");go("dashboard");
+ }catch(err){dbError(err)}}
+async function submitOffer(e,id){e.preventDefault();const f=e.target,r=state.requests.find(x=>x.id===id);if(!state.user)return openAuth("login");if(state.user.role!=="seller")return toast("Seller account required");if(Number(f.price.value)>r.budget)return toast("Offer must be within the buyer's budget");try{
+ const {error}=await sb.from("offers").insert({request_id:id,seller_id:state.user.id,price:Number(f.price.value),delivery_days:Number(f.days.value),message:f.message.value.trim()});if(error)throw error;await loadDbState();render();toast("Offer sent");
+ }catch(err){dbError(err)}}
+async function acceptOffer(id){const o=state.offers.find(x=>x.id===id),r=state.requests.find(x=>x.id===o?.requestId);if(!o||!r||!state.user||r.owner!==state.user.id)return toast("Only the buyer who posted this request can accept an offer.");if(!confirm("Accept "+o.seller+"'s offer for "+money(o.price)+"?"))return;try{
+ const {error:txErr}=await sb.from("transactions").insert({request_id:r.id,offer_id:o.id,buyer_id:state.user.id,seller_id:o.sellerId,amount:o.price,status:"in_progress"});if(txErr)throw txErr;
+ const {error:reqErr}=await sb.from("requests").update({status:"in_progress"}).eq("id",r.id);if(reqErr)throw reqErr;await loadDbState();render();toast("Offer accepted. Deal created.");
+ }catch(err){dbError(err)}}
+async function messageSeller(id){const o=state.offers.find(x=>x.id===id),r=state.requests.find(x=>x.id===o?.requestId);if(!o||!state.user)return openAuth("login");const body=prompt("Write a message to "+o.seller+":");if(!body?.trim())return;const recipient=state.user.id===r.owner?o.sellerId:r.owner;try{
+ const {error}=await sb.from("messages").insert({request_id:r.id,sender_id:state.user.id,recipient_id:recipient,body:body.trim()});if(error)throw error;await loadDbState();render();toast("Message sent");
+ }catch(err){dbError(err)}}
+async function completeDeal(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(!confirm("Confirm this deal is complete? The 7% commission is recorded. Payment is handled outside the app."))return;try{
+ const {error}=await sb.from("transactions").update({status:"completed",completed_at:new Date().toISOString()}).eq("id",id);if(error)throw error;await loadDbState();render();toast("Deal marked complete.");
+ }catch(err){dbError(err)}}
+async function initReverse(){try{await loadDbState();render()}catch(e){console.error(e);toast("Could not connect to database. Check Supabase setup.");render()}}
+initReverse();
+
 </script></body></html>
